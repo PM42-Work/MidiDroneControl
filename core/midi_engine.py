@@ -67,8 +67,15 @@ class MIDIDRONECONTROL_OT_toggle_midi(bpy.types.Operator):
                 self.report({'ERROR'}, "No MIDI Hardware input ports detected!")
                 return {'CANCELLED'}
                 
-            # Pick first available active port
-            midi_in.open_port(0)
+            # Connect to the exact port selected in the UI dropdown
+            port_index = 0
+            if sc.mdc_midi_device != 'NONE':
+                try:
+                    port_index = int(sc.mdc_midi_device)
+                except ValueError:
+                    pass
+            
+            midi_in.open_port(port_index)
             midi_in.set_callback(midi_callback)
             
             midi_backend_backend = midi_in
@@ -80,7 +87,7 @@ class MIDIDRONECONTROL_OT_toggle_midi(bpy.types.Operator):
             
             # Hook listener callback directly into Blender loop
             bpy.app.timers.register(poll_midi_queue, persistent=True)
-            self.report({'INFO'}, f"Connected to MIDI Device: {ports[0]}")
+            self.report({'INFO'}, f"Connected to MIDI Device: {ports[port_index]}")
             
         except ImportError:
             self.report({'ERROR'}, "MIDI library dependencies not found! Package with script first.")
@@ -90,7 +97,9 @@ class MIDIDRONECONTROL_OT_toggle_midi(bpy.types.Operator):
             return {'CANCELLED'}
             
         return {'FINISHED'}
+    
 
+    
 def register():
     bpy.utils.register_class(MIDIDRONECONTROL_OT_toggle_midi)
 

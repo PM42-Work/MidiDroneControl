@@ -1,11 +1,10 @@
 import json
 
-# Global runtime caches
-# Map: pad_index (int) -> dict of drone data
 active_payloads = {}
-
-# Map: drone_name (str) -> frame_number (float/int) until which the drone is locked
 drone_cooldowns = {}
+
+# Keep track of the playhead to detect backwards time-travel
+last_evaluated_frame = -1
 
 def load_bank_to_cache(context):
     """Deserializes the current bank's JSON data into high-speed memory."""
@@ -26,5 +25,6 @@ def load_bank_to_cache(context):
 
 def clear_cooldowns():
     """Resets all drone locks."""
-    global drone_cooldowns
+    global drone_cooldowns, last_evaluated_frame
     drone_cooldowns.clear()
+    last_evaluated_frame = -1

@@ -9,7 +9,23 @@ class MIDIDRONECONTROL_OT_trigger_pad(bpy.types.Operator):
 
     def execute(self, context):
         sc = context.scene
+        
+        # 1. HARD GATE: Must be Armed
+        if not sc.mdc_is_armed:
+            return {'FINISHED'}
+            
+        # 2. HARD GATE: Must be Playing
+        is_playing = getattr(context.screen, "is_animation_playing", False)
+        if not is_playing:
+            return {'FINISHED'}
+
         current_frame = sc.frame_current
+        
+        # 3. TIME TRAVEL FIX: If playhead moved backwards, instantly free all drones
+        if current_frame < memory.last_evaluated_frame:
+            memory.clear_cooldowns()
+            
+        memory.last_evaluated_frame = current_frame
         
         # Retrieve from high speed dictionary cache
         payload = memory.active_payloads.get(self.pad_index)

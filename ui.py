@@ -1,7 +1,6 @@
 import bpy
 from .core import midi_engine
 
-
 class MIDIDRONECONTROL_PT_panel(bpy.types.Panel):
     bl_label = "Midi Drone Control"
     bl_space_type = 'VIEW_3D'
@@ -27,14 +26,12 @@ class MIDIDRONECONTROL_PT_panel(bpy.types.Panel):
         if sc.mdc_layer_mode == 'MULTI':
             box.prop(sc, "mdc_target_layer", text="")
 
-
-        icon_conn = 'TRIA_DOWN' if midi_engine.is_listening else 'PLUG'
+        # FIXED ICONS HERE
+        icon_conn = 'LINKED' if midi_engine.is_listening else 'UNLINKED'
         text_conn = "Disconnect Controller" if midi_engine.is_listening else "Connect MIDI Controller"
         box.operator("mdc.toggle_midi", text=text_conn, icon=icon_conn)
             
         box.prop(sc, "mdc_midi_device", text="")
-
-
 
         # 2. Master Arm (Big Button)
         row = layout.row()
