@@ -28,7 +28,7 @@ class MIDIDRONECONTROL_PT_panel(bpy.types.Panel):
             box.prop(sc, "mdc_target_layer", text="")
 
 
-        icon_conn = 'TRIA_DOWN' if midi_engine.is_listening else 'WIRE'
+        icon_conn = 'TRIA_DOWN' if midi_engine.is_listening else 'PLUG'
         text_conn = "Disconnect Controller" if midi_engine.is_listening else "Connect MIDI Controller"
         box.operator("mdc.toggle_midi", text=text_conn, icon=icon_conn)
             
