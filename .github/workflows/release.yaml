@@ -1,0 +1,47 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version Tag (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.x'
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Bundle Dependencies
+        run: |
+          chmod +x setup_dependencies.sh
+          ./setup_dependencies.sh
+
+      - name: Create Clean Zip
+        run: |
+          FOLDER_NAME="MidiDroneControl"
+          mkdir $FOLDER_NAME
+          
+          # Sync files, excluding dev folders
+          rsync -av --progress . $FOLDER_NAME --exclude $FOLDER_NAME --exclude .git --exclude .github --exclude .gitignore
+          
+          zip -r "MidiDroneControl.zip" $FOLDER_NAME
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name == 'main' && inputs.version || github.ref_name }}
+          files: MidiDroneControl.zip
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
