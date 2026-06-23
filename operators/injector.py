@@ -1,4 +1,5 @@
 import bpy
+import numpy as np
 from ..core import memory
 
 class MIDIDRONECONTROL_OT_trigger_pad(bpy.types.Operator):
@@ -9,76 +10,134 @@ class MIDIDRONECONTROL_OT_trigger_pad(bpy.types.Operator):
 
     def execute(self, context):
         sc = context.scene
-        
-        # 1. HARD GATE: Must be Armed
         if not sc.mdc_is_armed:
             return {'FINISHED'}
             
-        # 2. HARD GATE: Must be Playing
-        is_playing = getattr(context.screen, "is_animation_playing", False)
+        screen = context.screen
+        if not screen and context.window_manager.windows:
+            screen = context.window_manager.windows[0].screen
+        is_playing = getattr(screen, "is_animation_playing", False) if screen else False
+        
+        # UI Button behavior matches MIDI behavior: Log it to RAM without the layer.
+        memory.recorded_triggers.append((self.pad_index, sc.frame_current))
+        
         if not is_playing:
-            return {'FINISHED'}
+            bpy.ops.mdc.bake_triggers()
+            
+        return {'FINISHED'}
 
-        current_frame = sc.frame_current
-        
-        # 3. TIME TRAVEL FIX: If playhead moved backwards, instantly free all drones
-        if current_frame < memory.last_evaluated_frame:
-            memory.clear_cooldowns()
-            
-        memory.last_evaluated_frame = current_frame
-        
-        # Retrieve from high speed dictionary cache
-        payload = memory.active_payloads.get(self.pad_index)
-        if not payload:
+class MIDIDRONECONTROL_OT_bake_triggers(bpy.types.Operator):
+    bl_idname = "mdc.bake_triggers"
+    bl_label = "Bake Recorded Triggers"
+    
+    def execute(self, context):
+        sc = context.scene
+        if not memory.recorded_triggers:
             return {'FINISHED'}
             
-        target_layer = sc.mdc_target_layer if sc.mdc_layer_mode == 'MULTI' else "md_layer_1"
+        memory.recorded_triggers.sort(key=lambda x: x[1])
+        memory.clear_cooldowns()
         
-        for drone_name, channels in payload.items():
-            # Drone Level Cooldown (Option B Gatekeeper)
-            if drone_name in memory.drone_cooldowns:
-                if current_frame < memory.drone_cooldowns[drone_name]:
-                    continue # Skip this drone, it's busy executing a prior command
+        drones_to_update = {} 
+        chunk_masks = {} 
+
+        # 2. Simulate timeline injection matrices
+        for pad_idx, trigger_frame in memory.recorded_triggers:
+            payload = memory.active_payloads.get(pad_idx)
+            if not payload: continue
             
-            obj = bpy.data.objects.get(drone_name)
-            if not obj:
-                continue
-                
-            if not obj.animation_data:
-                obj.animation_data_create()
-            if not obj.animation_data.action:
-                obj.animation_data.action = bpy.data.actions.new(name=f"{drone_name}_Action")
-                
-            action = obj.animation_data.action
-            max_pad_frame_offset = 0
+            # --- NEW: EXTRACT HARDCODED LAYER FROM PAD MEMORY ---
+            target_layer = payload.get("layer", "md_layer_1")
+            drone_data = payload.get("drones", payload) 
             
-            # Write data channels
-            for array_idx_str, keys in channels.items():
-                array_idx = int(array_idx_str)
-                data_path = f'["{target_layer}"]'
+            for drone_name, channels in drone_data.items():
                 
-                # Look for existing F-curve or create one
-                fcurve = action.fcurves.find(data_path, index=array_idx)
-                if not fcurve:
-                    fcurve = action.fcurves.new(data_path, index=array_idx)
+                # The Composite Lock: specific to THIS drone on THIS layer
+                cooldown_key = (target_layer, drone_name)
                 
-                for offset_frame, value in keys:
-                    target_f = current_frame + offset_frame
-                    fcurve.keyframe_points.insert(target_f, value, options={'FAST'})
-                    if offset_frame > max_pad_frame_offset:
-                        max_pad_frame_offset = offset_frame
+                if cooldown_key in memory.drone_cooldowns:
+                    if trigger_frame < memory.drone_cooldowns[cooldown_key]:
+                        continue
                         
+                if cooldown_key not in drones_to_update:
+                    drones_to_update[cooldown_key] = {0: [], 1: [], 2: []}
+                    chunk_masks[cooldown_key] = []
+                    
+                local_max_offset = 0
+                for array_idx_str, keys in channels.items():
+                    array_idx = int(array_idx_str)
+                    for offset_frame, value in keys:
+                        target_f = trigger_frame + offset_frame
+                        drones_to_update[cooldown_key][array_idx].append([target_f, value])
+                        if offset_frame > local_max_offset:
+                            local_max_offset = offset_frame
+                            
+                chunk_masks[cooldown_key].append((trigger_frame, trigger_frame + local_max_offset))
+                memory.drone_cooldowns[cooldown_key] = trigger_frame + local_max_offset
+
+        # 3. Write Data
+        for (target_layer, drone_name), channels in drones_to_update.items():
+            obj = bpy.data.objects.get(drone_name)
+            if not obj: continue
+            
+            if not obj.animation_data: obj.animation_data_create()
+            if not obj.animation_data.action: obj.animation_data.action = bpy.data.actions.new(name=f"{drone_name}_Action")
+            action = obj.animation_data.action
+            
+            for array_idx, new_keys in channels.items():
+                if not new_keys: continue
+                
+                data_path = f'["{target_layer}"]'
+                fcurve = action.fcurves.find(data_path, index=array_idx)
+                if not fcurve: fcurve = action.fcurves.new(data_path, index=array_idx)
+                
+                keys_np = np.array(new_keys, dtype=np.float32)
+                keys_np = keys_np[keys_np[:, 0].argsort()]
+                
+                num_existing = len(fcurve.keyframe_points)
+                if num_existing > 0:
+                    coords = np.zeros(num_existing * 2, dtype=np.float32)
+                    fcurve.keyframe_points.foreach_get('co', coords)
+                    existing_pts = coords.reshape((num_existing, 2))
+                    
+                    mask = np.ones(len(existing_pts), dtype=bool)
+                    for start_f, end_f in chunk_masks[(target_layer, drone_name)]:
+                        in_chunk = (existing_pts[:, 0] >= start_f) & (existing_pts[:, 0] <= end_f)
+                        mask &= ~in_chunk
+                    existing_pts = existing_pts[mask]
+                else:
+                    existing_pts = np.empty((0, 2), dtype=np.float32)
+                    
+                combined_pts = np.vstack((existing_pts, keys_np))
+                combined_pts = combined_pts[combined_pts[:, 0].argsort()]
+                
+                fcurve.keyframe_points.clear() 
+                num_points = len(combined_pts)
+                fcurve.keyframe_points.add(num_points)
+                fcurve.keyframe_points.foreach_set('co', combined_pts.flatten())
                 fcurve.update()
                 
-            # Lock drone until this complete sample chunk has finished executing
-            memory.drone_cooldowns[drone_name] = current_frame + max_pad_frame_offset
-            
-        # Force redraw of the screen to give real-time viewport changes
-        context.area.tag_redraw()
+                bool_arr = [False] * num_points
+                fcurve.keyframe_points.foreach_set('select_control_point', bool_arr)
+                fcurve.keyframe_points.foreach_set('select_left_handle', bool_arr)
+                fcurve.keyframe_points.foreach_set('select_right_handle', bool_arr)
+
+        memory.recorded_triggers.clear()
+        
+        if context.area:
+            context.area.tag_redraw()
+        else:
+            for window in context.window_manager.windows:
+                for area in window.screen.areas:
+                    if area.type in {'VIEW_3D', 'DOPESHEET_EDITOR', 'GRAPH_EDITOR'}:
+                        area.tag_redraw()
+                        
         return {'FINISHED'}
 
 def register():
     bpy.utils.register_class(MIDIDRONECONTROL_OT_trigger_pad)
+    bpy.utils.register_class(MIDIDRONECONTROL_OT_bake_triggers)
 
 def unregister():
+    bpy.utils.unregister_class(MIDIDRONECONTROL_OT_bake_triggers)
     bpy.utils.unregister_class(MIDIDRONECONTROL_OT_trigger_pad)

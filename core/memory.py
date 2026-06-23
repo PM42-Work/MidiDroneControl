@@ -1,9 +1,12 @@
 import json
 
+# High-speed caches
 active_payloads = {}
 drone_cooldowns = {}
 
-# Keep track of the playhead to detect backwards time-travel
+# Deferred Baking (Live Recording) Cache
+recorded_triggers = []
+was_playing = False
 last_evaluated_frame = -1
 
 def load_bank_to_cache(context):

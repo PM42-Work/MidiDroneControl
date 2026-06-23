@@ -18,7 +18,6 @@ class MIDIDRONECONTROL_OT_sample_pad(bpy.types.Operator):
             
         target_layer = sc.mdc_target_layer if sc.mdc_layer_mode == 'MULTI' else "md_layer_1"
         
-        # Step 1: Find Global Time Zero across all selected items
         all_selected_frames = []
         sampled_data = {}
         
@@ -27,7 +26,6 @@ class MIDIDRONECONTROL_OT_sample_pad(bpy.types.Operator):
             obj_data = {}
             
             for fcurve in action.fcurves:
-                # Target the correct custom property or layer path
                 if target_layer not in fcurve.data_path:
                     continue
                     
@@ -41,7 +39,6 @@ class MIDIDRONECONTROL_OT_sample_pad(bpy.types.Operator):
                     
                 for kp in selected_keys:
                     all_selected_frames.append(kp.co.x)
-                    # Store as [frame, value]
                     obj_data[array_index].append([kp.co.x, kp.co.y])
             
             if obj_data:
@@ -54,7 +51,6 @@ class MIDIDRONECONTROL_OT_sample_pad(bpy.types.Operator):
         global_time_zero = min(all_selected_frames)
         max_duration = 0
         
-        # Step 2: Normalize timelines relative to Global Time Zero
         normalized_payload = {}
         for drone_name, channels in sampled_data.items():
             normalized_payload[drone_name] = {}
@@ -67,17 +63,21 @@ class MIDIDRONECONTROL_OT_sample_pad(bpy.types.Operator):
                         max_duration = time_offset
                 normalized_payload[drone_name][str(array_idx)] = norm_keys
 
-        # Step 3: Write out to Blender persistent storage
+        # --- NEW: HARDCODE THE LAYER INTO THE PAYLOAD ---
+        final_payload = {
+            "layer": target_layer,
+            "drones": normalized_payload
+        }
+
         bank = sc.mdc_banks[sc.mdc_bank_index]
         pad = bank.pads[self.pad_index]
-        pad.json_payload = json.dumps(normalized_payload)
+        pad.json_payload = json.dumps(final_payload)
         pad.name = f"Cue ({len(normalized_payload)} Drones)"
         
-        # Sync immediately with our active memory cache
         from ..core import memory
         memory.load_bank_to_cache(context)
         
-        self.report({'INFO'}, f"Sampled {len(normalized_payload)} drones to Pad {self.pad_index + 1} (Len: {int(max_duration)}f)")
+        self.report({'INFO'}, f"Sampled {len(normalized_payload)} drones on {target_layer} to Pad {self.pad_index + 1} (Len: {int(max_duration)}f)")
         return {'FINISHED'}
 
 def register():
