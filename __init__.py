@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Midi Drone Control",
     "author": "Raghuvansh Agarwal",
-    "version": (1, 0, 1),
+    "version": (1, 0, 2),
     "blender": (4, 3, 0),
     "location": "View3D > Sidebar > Midi Drone Control",
     "description": "MIDI-triggered sample pad for live drone light busking",
