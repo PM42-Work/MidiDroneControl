@@ -4,7 +4,6 @@ import json
 class MIDIDRONECONTROL_OT_sample_pad(bpy.types.Operator):
     bl_idname = "mdc.sample_pad"
     bl_label = "Sample Selected Keyframes"
-    bl_description = "Capture selected keyframes from chosen layer and write to this pad"
     
     pad_index: bpy.props.IntProperty()
 
@@ -12,41 +11,29 @@ class MIDIDRONECONTROL_OT_sample_pad(bpy.types.Operator):
         sc = context.scene
         selected_drones = [obj for obj in context.selected_objects if obj.animation_data and obj.animation_data.action]
         
-        if not selected_drones:
-            self.report({'WARNING'}, "No objects with animation data selected!")
-            return {'CANCELLED'}
+        if not selected_drones: return {'CANCELLED'}
             
         target_layer = sc.mdc_target_layer if sc.mdc_layer_mode == 'MULTI' else "md_layer_1"
-        
         all_selected_frames = []
         sampled_data = {}
         
         for obj in selected_drones:
             action = obj.animation_data.action
             obj_data = {}
-            
             for fcurve in action.fcurves:
-                if target_layer not in fcurve.data_path:
-                    continue
-                    
+                if target_layer not in fcurve.data_path: continue
                 selected_keys = [kp for kp in fcurve.keyframe_points if kp.select_control_point]
-                if not selected_keys:
-                    continue
+                if not selected_keys: continue
                     
                 array_index = fcurve.array_index
-                if array_index not in obj_data:
-                    obj_data[array_index] = []
-                    
+                if array_index not in obj_data: obj_data[array_index] = []
                 for kp in selected_keys:
                     all_selected_frames.append(kp.co.x)
                     obj_data[array_index].append([kp.co.x, kp.co.y])
             
-            if obj_data:
-                sampled_data[obj.name] = obj_data
+            if obj_data: sampled_data[obj.name] = obj_data
 
-        if not all_selected_frames:
-            self.report({'WARNING'}, "No selected keyframe points found in the timeline!")
-            return {'CANCELLED'}
+        if not all_selected_frames: return {'CANCELLED'}
             
         global_time_zero = min(all_selected_frames)
         max_duration = 0
@@ -59,29 +46,23 @@ class MIDIDRONECONTROL_OT_sample_pad(bpy.types.Operator):
                 for frame, val in keys:
                     time_offset = frame - global_time_zero
                     norm_keys.append([time_offset, val])
-                    if time_offset > max_duration:
-                        max_duration = time_offset
+                    if time_offset > max_duration: max_duration = time_offset
                 normalized_payload[drone_name][str(array_idx)] = norm_keys
 
-        # --- NEW: HARDCODE THE LAYER INTO THE PAYLOAD ---
-        final_payload = {
-            "layer": target_layer,
-            "drones": normalized_payload
-        }
+        final_payload = {"layer": target_layer, "drones": normalized_payload}
 
         bank = sc.mdc_banks[sc.mdc_bank_index]
         pad = bank.pads[self.pad_index]
         pad.json_payload = json.dumps(final_payload)
         pad.name = f"Cue ({len(normalized_payload)} Drones)"
         
+        # ADD TO MEMORY AND MARK DIRTY
         from ..core import memory
-        memory.load_bank_to_cache(context)
+        memory.active_payloads[self.pad_index] = final_payload
+        memory.dirty_pads[self.pad_index] = True
         
-        self.report({'INFO'}, f"Sampled {len(normalized_payload)} drones on {target_layer} to Pad {self.pad_index + 1} (Len: {int(max_duration)}f)")
+        self.report({'INFO'}, f"Sampled {len(normalized_payload)} drones on {target_layer} to Pad {self.pad_index + 1}")
         return {'FINISHED'}
 
-def register():
-    bpy.utils.register_class(MIDIDRONECONTROL_OT_sample_pad)
-
-def unregister():
-    bpy.utils.unregister_class(MIDIDRONECONTROL_OT_sample_pad)
+def register(): bpy.utils.register_class(MIDIDRONECONTROL_OT_sample_pad)
+def unregister(): bpy.utils.unregister_class(MIDIDRONECONTROL_OT_sample_pad)

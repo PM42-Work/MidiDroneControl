@@ -1,28 +1,32 @@
 import bpy
 import numpy as np
+import time
 from ..core import memory
 
 class MIDIDRONECONTROL_OT_trigger_pad(bpy.types.Operator):
     bl_idname = "mdc.trigger_pad"
     bl_label = "Trigger Pad"
-    
     pad_index: bpy.props.IntProperty()
 
     def execute(self, context):
         sc = context.scene
-        if not sc.mdc_is_armed:
-            return {'FINISHED'}
+        state = sc.mdc_state
+        if state == 'SAFE': return {'FINISHED'}
             
         screen = context.screen
         if not screen and context.window_manager.windows:
             screen = context.window_manager.windows[0].screen
         is_playing = getattr(screen, "is_animation_playing", False) if screen else False
         
-        # UI Button behavior matches MIDI behavior: Log it to RAM without the layer.
-        memory.recorded_triggers.append((self.pad_index, sc.frame_current))
+        target_layer = sc.mdc_target_layer if sc.mdc_layer_mode == 'MULTI' else "md_layer_1"
         
-        if not is_playing:
-            bpy.ops.mdc.bake_triggers()
+        memory.live_busk_triggers.append((self.pad_index, time.time(), target_layer))
+        
+        if state == 'RECORD':
+            memory.recorded_triggers.append((self.pad_index, sc.frame_current, target_layer))
+            if not is_playing:
+                bpy.ops.mdc.bake_triggers()
+                memory.live_busk_triggers.clear()
             
         return {'FINISHED'}
 
@@ -32,8 +36,7 @@ class MIDIDRONECONTROL_OT_bake_triggers(bpy.types.Operator):
     
     def execute(self, context):
         sc = context.scene
-        if not memory.recorded_triggers:
-            return {'FINISHED'}
+        if not memory.recorded_triggers: return {'FINISHED'}
             
         memory.recorded_triggers.sort(key=lambda x: x[1])
         memory.clear_cooldowns()
@@ -41,23 +44,17 @@ class MIDIDRONECONTROL_OT_bake_triggers(bpy.types.Operator):
         drones_to_update = {} 
         chunk_masks = {} 
 
-        # 2. Simulate timeline injection matrices
-        for pad_idx, trigger_frame in memory.recorded_triggers:
+        for pad_idx, trigger_frame, trigger_layer in memory.recorded_triggers:
             payload = memory.active_payloads.get(pad_idx)
             if not payload: continue
             
-            # --- NEW: EXTRACT HARDCODED LAYER FROM PAD MEMORY ---
-            target_layer = payload.get("layer", "md_layer_1")
+            target_layer = payload.get("layer", trigger_layer)
             drone_data = payload.get("drones", payload) 
             
             for drone_name, channels in drone_data.items():
-                
-                # The Composite Lock: specific to THIS drone on THIS layer
                 cooldown_key = (target_layer, drone_name)
-                
-                if cooldown_key in memory.drone_cooldowns:
-                    if trigger_frame < memory.drone_cooldowns[cooldown_key]:
-                        continue
+                if cooldown_key in memory.drone_cooldowns and trigger_frame < memory.drone_cooldowns[cooldown_key]:
+                    continue
                         
                 if cooldown_key not in drones_to_update:
                     drones_to_update[cooldown_key] = {0: [], 1: [], 2: []}
@@ -69,13 +66,11 @@ class MIDIDRONECONTROL_OT_bake_triggers(bpy.types.Operator):
                     for offset_frame, value in keys:
                         target_f = trigger_frame + offset_frame
                         drones_to_update[cooldown_key][array_idx].append([target_f, value])
-                        if offset_frame > local_max_offset:
-                            local_max_offset = offset_frame
+                        if offset_frame > local_max_offset: local_max_offset = offset_frame
                             
                 chunk_masks[cooldown_key].append((trigger_frame, trigger_frame + local_max_offset))
                 memory.drone_cooldowns[cooldown_key] = trigger_frame + local_max_offset
 
-        # 3. Write Data
         for (target_layer, drone_name), channels in drones_to_update.items():
             obj = bpy.data.objects.get(drone_name)
             if not obj: continue
@@ -105,32 +100,28 @@ class MIDIDRONECONTROL_OT_bake_triggers(bpy.types.Operator):
                         in_chunk = (existing_pts[:, 0] >= start_f) & (existing_pts[:, 0] <= end_f)
                         mask &= ~in_chunk
                     existing_pts = existing_pts[mask]
-                else:
-                    existing_pts = np.empty((0, 2), dtype=np.float32)
+                else: existing_pts = np.empty((0, 2), dtype=np.float32)
                     
                 combined_pts = np.vstack((existing_pts, keys_np))
                 combined_pts = combined_pts[combined_pts[:, 0].argsort()]
                 
                 fcurve.keyframe_points.clear() 
-                num_points = len(combined_pts)
-                fcurve.keyframe_points.add(num_points)
+                fcurve.keyframe_points.add(len(combined_pts))
                 fcurve.keyframe_points.foreach_set('co', combined_pts.flatten())
                 fcurve.update()
                 
-                bool_arr = [False] * num_points
+                bool_arr = [False] * len(combined_pts)
                 fcurve.keyframe_points.foreach_set('select_control_point', bool_arr)
                 fcurve.keyframe_points.foreach_set('select_left_handle', bool_arr)
                 fcurve.keyframe_points.foreach_set('select_right_handle', bool_arr)
 
         memory.recorded_triggers.clear()
         
-        if context.area:
-            context.area.tag_redraw()
+        if context.area: context.area.tag_redraw()
         else:
             for window in context.window_manager.windows:
                 for area in window.screen.areas:
-                    if area.type in {'VIEW_3D', 'DOPESHEET_EDITOR', 'GRAPH_EDITOR'}:
-                        area.tag_redraw()
+                    if area.type in {'VIEW_3D', 'DOPESHEET_EDITOR', 'GRAPH_EDITOR'}: area.tag_redraw()
                         
         return {'FINISHED'}
 
